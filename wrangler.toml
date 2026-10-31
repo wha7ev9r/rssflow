@@ -1,5 +1,6 @@
 # Buffy Reader — Cloudflare Worker (Free plan compatible)
-name = "buffy-reader"
+# Must match the Worker name in the Cloudflare dashboard / Workers Builds.
+name = "rssflow"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
@@ -11,9 +12,12 @@ FETCH_INTERVAL_MINUTES = "15"
 # Feeds fetched per cron call. Keep low: the Free plan allows 10ms CPU per request.
 MAX_FEEDS_PER_RUN = "2"
 
-# Create it with:
-#   npx wrangler hyperdrive create buffy-reader --connection-string="postgres://user:pass@host:5432/db"
-# then paste the returned id below.
+# Real Hyperdrive configuration for this project's PostgreSQL database.
+# When creating a Hyperdrive config, disable query caching:
+#   wrangler hyperdrive create rssflow --connection-string="postgres://..." --caching-disabled
+# or, for an existing config:
+#   wrangler hyperdrive update <HYPERDRIVE_ID> --caching-disabled
+# Cached reads make "mark as read" appear to revert after a refresh.
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "00000000000000000000000000000000"
+id = "a6643531e1534e629e52635ed8c0fe2f"
