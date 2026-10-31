@@ -1,0 +1,26 @@
+{
+  "name": "buffy-reader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "RSS reader on Cloudflare Workers free plan, external PostgreSQL, Google Reader API",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "db:migrate": "bun run scripts/migrate.ts"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.2.5",
+    "hono": "^4.9.7",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.8",
+    "@types/bun": "^1.2.21",
+    "@types/pg": "^8.15.5",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.37.1"
+  }
+}

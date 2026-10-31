@@ -1,0 +1,19 @@
+# Buffy Reader — Cloudflare Worker (Free plan compatible)
+name = "buffy-reader"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+SITE_NAME = "Buffy Reader"
+# How often each feed becomes due again (minutes).
+FETCH_INTERVAL_MINUTES = "15"
+# Feeds fetched per cron call. Keep low: the Free plan allows 10ms CPU per request.
+MAX_FEEDS_PER_RUN = "2"
+
+# Create it with:
+#   npx wrangler hyperdrive create buffy-reader --connection-string="postgres://user:pass@host:5432/db"
+# then paste the returned id below.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "00000000000000000000000000000000"

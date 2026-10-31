@@ -1,0 +1,17 @@
+# Copy to .dev.vars for `wrangler dev`.
+# In production use `wrangler secret put <NAME>`.
+
+# Login for the web UI and all API clients.
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "change-me-to-a-long-random-password"
+
+# Signs session cookies and Google Reader auth tokens. 32+ random chars.
+# Generate: openssl rand -base64 32
+AUTH_SECRET = "replace-with-a-long-random-secret"
+
+# Protects /api/cron/refresh. cron-job.org sends it as a header.
+# Generate: openssl rand -hex 24
+CRON_SECRET = "replace-with-a-long-random-token"
+
+# Optional local development database (Hyperdrive binding has priority).
+# DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/reader"
