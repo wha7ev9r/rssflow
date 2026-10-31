@@ -56,6 +56,17 @@ create table if not exists entries (
 create index if not exists entries_feed_pub_idx on entries (feed_id, published_at desc, id desc);
 create index if not exists entries_pub_idx on entries (published_at desc, id desc);
 
+-- Keep lightweight identities after article cleanup so repeat fetches cannot
+-- resurrect deleted articles as unread. Identities expire only with the feed.
+create table if not exists entry_seen (
+  feed_id bigint not null references feeds(id) on delete cascade,
+  guid    text not null,
+  primary key (feed_id, guid)
+);
+insert into entry_seen (feed_id, guid)
+  select feed_id, guid from entries
+  on conflict (feed_id, guid) do nothing;
+
 create table if not exists entry_states (
   user_id    bigint not null references users(id) on delete cascade,
   entry_id   bigint not null references entries(id) on delete cascade,

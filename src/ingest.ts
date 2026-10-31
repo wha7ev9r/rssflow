@@ -108,12 +108,13 @@ export async function refreshFeed(
   cfg: AppConfig,
   feed: FeedRef,
   fetchImpl?: typeof fetch,
+  timeoutMs = 12_000,
 ): Promise<RefreshOutcome> {
   const document = await fetchFeedDocument(feed.url, {
     etag: feed.etag,
     lastModified: feed.last_modified,
     userAgent: cfg.userAgent,
-    timeoutMs: 12_000,
+    timeoutMs,
     fetchImpl,
   });
 
@@ -142,12 +143,18 @@ export async function refreshFeed(
     return { feedId: feed.id, status: 'error', inserted: 0, error: message };
   }
 
-  const inserted = await persistParsedFeed(db, cfg, feed.id, feed.url, parsed, {
-    etag: document.etag,
-    lastModified: document.lastModified,
-    httpStatus: document.httpStatus,
-  });
-  return { feedId: feed.id, status: 'updated', inserted };
+  try {
+    const inserted = await persistParsedFeed(db, cfg, feed.id, feed.url, parsed, {
+      etag: document.etag,
+      lastModified: document.lastModified,
+      httpStatus: document.httpStatus,
+    });
+    return { feedId: feed.id, status: 'updated', inserted };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await store.markFeedError(db, feed.id, document.httpStatus, message, cfg.fetchIntervalMinutes * 60);
+    return { feedId: feed.id, status: 'error', inserted: 0, error: message };
+  }
 }
 
 /**
@@ -250,24 +257,17 @@ export async function runRefresh(
   const deadline = options.deadlineMs ?? 20_000;
   const limit = Math.max(1, Math.min(20, options.limit ?? cfg.maxFeedsPerRun));
 
-  let feeds: FeedRef[];
-  if (options.feedId) {
-    const feed = await store.getFeedById(db, options.feedId);
-    feeds = feed ? [feed] : [];
-  } else {
-    feeds = await store.listFeedsDue(db, limit);
-  }
-
-  if (feeds.length > 0) await store.claimFeeds(db, feeds.map((feed) => feed.id));
+  const feeds = await store.claimFeedsDue(db, limit, options.feedId);
 
   const results: RefreshOutcome[] = [];
   for (const [index, feed] of feeds.entries()) {
-    if (Date.now() - started > deadline) {
+    const remainingMs = deadline - (Date.now() - started);
+    if (remainingMs <= 0) {
       await store.claimFeeds(db, feeds.slice(index).map((item) => item.id), 2);
       break;
     }
     try {
-      results.push(await refreshFeed(db, cfg, feed, options.fetchImpl));
+      results.push(await refreshFeed(db, cfg, feed, options.fetchImpl, Math.min(12_000, remainingMs)));
     } catch (error) {
       results.push({
         feedId: feed.id,

@@ -1,7 +1,9 @@
 /** Feed parsing: RSS 0.9x/2.0, Atom, RDF (RSS 1.0) and JSON Feed. */
 
-import { XMLParser } from 'fast-xml-parser';
-import { absoluteUrl, escapeHtml } from '../util';
+import { createHash } from 'node:crypto';
+import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { escapeHtml } from '../util';
+import { absoluteFeedUrl as absoluteUrl } from './url';
 
 export type FeedFormat = 'rss' | 'atom' | 'rdf' | 'json';
 
@@ -44,6 +46,23 @@ const parser = new XMLParser({
   removeNSPrefix: true,
   processEntities: true,
   htmlEntities: true,
+  // Keep mixed XHTML intact instead of collapsing its text and repeated tags.
+  stopNodes: ['feed.entry.content.div', 'feed.entry.summary.div'],
+});
+
+const xhtmlParser = new XMLParser({
+  preserveOrder: true,
+  ignoreAttributes: false,
+  removeNSPrefix: true,
+  parseTagValue: false,
+  parseAttributeValue: false,
+  trimValues: false,
+  htmlEntities: true,
+});
+const xhtmlBuilder = new XMLBuilder({
+  preserveOrder: true,
+  ignoreAttributes: false,
+  unpairedTags: ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'],
 });
 
 type Node = Record<string, unknown>;
@@ -152,10 +171,6 @@ function hostnameOf(url: string): string {
   }
 }
 
-function looksLikeHtml(value: string): boolean {
-  return /<\/?[a-z][^>]*>/i.test(value);
-}
-
 function textToHtml(value: string): string {
   const escaped = escapeHtml(value.trim());
   return `<p>${escaped.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
@@ -164,19 +179,19 @@ function textToHtml(value: string): string {
 function atomHtmlContent(node: unknown): string | null {
   if (node == null) return null;
   if (typeof node === 'string') {
-    return node.trim() ? (looksLikeHtml(node) ? node : textToHtml(node)) : null;
+    return node.trim() ? textToHtml(node) : null;
   }
   if (!isNode(node)) return null;
 
   const type = (attr(node, 'type') ?? '').toLowerCase();
   if (type === 'xhtml' || node.div != null) {
-    const inner = node.div ?? node;
-    const html = serializeChildren(inner).trim();
+    const raw = node.div != null ? textOf(node.div) : '';
+    const html = raw ? xhtmlBuilder.build(xhtmlParser.parse(raw)).trim() : '';
     return html || null;
   }
   const raw = textOf(node);
   if (!raw.trim()) return null;
-  if (type === 'text' || (type === '' && !looksLikeHtml(raw))) return textToHtml(raw);
+  if (type === 'text' || type === '') return textToHtml(raw);
   return raw;
 }
 
@@ -281,7 +296,9 @@ function parseRss(doc: Node, feedUrl: string, baseUrl: string): ParsedFeed {
       cleanText(raw.guid) ||
       cleanText(raw.id) ||
       link ||
-      `${title}|${cleanText(raw.pubDate) || cleanText(raw.date)}`;
+      (title || cleanText(raw.pubDate) || cleanText(raw.date)
+        ? `${title}|${cleanText(raw.pubDate) || cleanText(raw.date)}`
+        : `content:${createHash('sha256').update(content).digest('hex')}`);
     if (!guid) continue;
     const enclosure = rssEnclosure(raw, baseUrl);
     items.push({
@@ -384,9 +401,7 @@ function parseJsonFeed(payload: unknown, feedUrl: string, baseUrl: string): Pars
           : null;
     const summary =
       typeof raw.summary === 'string' && raw.summary.trim()
-        ? looksLikeHtml(raw.summary)
-          ? raw.summary
-          : textToHtml(raw.summary)
+        ? textToHtml(raw.summary)
         : null;
     const attachment = first(raw.attachments);
     const authors = isNode(raw.author) ? [raw.author] : asArray(raw.authors);

@@ -5,135 +5,75 @@ import type { EntryRow, SubscriptionRow } from './store';
 import type { Stream } from './stream';
 import { escapeHtml as esc, formatDateTime, preview, timeAgo } from './util';
 
-const CSS = `
-:root{--bg:#f7f7f5;--panel:#fff;--fg:#1c1c1a;--muted:#6f6f69;--line:#e5e5df;--accent:#1f6feb;--accent-soft:#e9f0fd;--danger:#b42318;--radius:10px}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1c1c1a;--fg:#ecece7;--muted:#9a9a92;--line:#2f2f2b;--accent:#7aa7ff;--accent-soft:#1d2a44;--danger:#ff8a80}}
-*{box-sizing:border-box}
-html{color-scheme:light dark}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}
-a{color:inherit;text-decoration:none}
-button{font:inherit}
-.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
-.brand{font-weight:700;font-size:16px;white-space:nowrap}
-.search{flex:1;max-width:420px;margin-left:auto}
-.search input{width:100%;padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
-.topnav{display:flex;gap:14px;font-size:14px;color:var(--muted);white-space:nowrap}
-.topnav a:hover{color:var(--fg)}
-.shell{display:flex;align-items:flex-start;min-height:calc(100vh - 57px)}
-.sidebar{width:252px;flex:none;position:sticky;top:57px;height:calc(100vh - 57px);overflow:auto;padding:14px 10px;border-right:1px solid var(--line)}
-.nav{display:flex;flex-direction:column;gap:2px;margin-bottom:18px}
-.nav-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;font-size:14px}
-.nav-item:hover{background:var(--accent-soft)}
-.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
-.badge{margin-left:auto;background:var(--accent);color:#fff;border-radius:999px;font-size:11px;line-height:1;padding:4px 7px;font-weight:600}
-.side-head{display:flex;justify-content:space-between;align-items:center;padding:0 10px 6px;font-size:12px;letter-spacing:.04em;color:var(--muted);text-transform:uppercase}
-.side-head a{text-transform:none;letter-spacing:0}
-.folder-label{padding:8px 10px 3px;font-size:12.5px;color:var(--muted);display:flex;gap:6px;align-items:center}
-.feed-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;font-size:14px;color:var(--fg)}
-.feed-item:hover{background:var(--accent-soft)}
-.feed-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
-.avatar{width:17px;height:17px;flex:none;border-radius:4px;background:var(--line);color:var(--muted);font-size:10px;display:flex;align-items:center;justify-content:center;font-weight:700}
-.feed-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.side-foot{margin-top:20px;padding:10px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
-main{flex:1;min-width:0;width:100%;max-width:880px;margin:0 auto;padding:22px 22px 70px}
-.page-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 6px}
-.page-head h1{font-size:21px;margin:0;letter-spacing:-.01em}
-.subhead{color:var(--muted);font-size:13px;margin:0 0 18px}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);cursor:pointer;font-size:13.5px}
-.btn:hover{border-color:var(--accent)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn.small{padding:4px 9px;font-size:12.5px}
-.btn.danger{color:var(--danger)}
-.link{border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font-size:13px}
-.link:hover{color:var(--fg)}
-.article{display:flex;gap:12px;align-items:flex-start;padding:15px 2px;border-bottom:1px solid var(--line)}
-.article.cursor{background:var(--accent-soft);border-radius:8px;margin:0 -10px;padding:15px 12px;border-bottom-color:transparent}
-.article-main{min-width:0;flex:1}
-.article-title{font-weight:600;font-size:16px;line-height:1.35;display:block}
-.article-title:hover{color:var(--accent)}
-.article.is-read .article-title,.article.is-read .excerpt{opacity:.55}
-.article-meta{display:flex;flex-wrap:wrap;gap:7px;color:var(--muted);font-size:12.5px;margin:4px 0 5px}
-.excerpt{margin:0;color:var(--muted);font-size:13.5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.star-btn{border:0;background:none;color:var(--muted);font-size:21px;line-height:1;cursor:pointer;padding:2px 4px}
-.is-starred .star-btn{color:#d9a400}
-.empty{color:var(--muted);padding:40px 4px;text-align:center}
-.pager{display:flex;justify-content:center;gap:14px;padding:26px 0;font-size:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin:0 0 16px}
-.card h2{font-size:15px;margin:0 0 12px}
-.card p:last-child{margin-bottom:0}
-.form-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-input[type=url],input[type=text],input[type=password],input[type=search],select{padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;font-size:13.5px;min-width:0}
-.form-row input[type=url],.form-row input[type=text]{flex:1;min-width:200px}
-label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
-.muted{color:var(--muted)}
-.error{color:var(--danger)}
-.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:rgba(127,127,127,.13);padding:2px 6px;border-radius:5px;word-break:break-all}
-pre.code{display:block;padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5;margin:8px 0}
-.feed-row{border-bottom:1px solid var(--line);padding:14px 0}
-.feed-row:last-child{border-bottom:0}
-.feed-row-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.feed-row-title{font-weight:600;font-size:15px}
-.feed-row-url{color:var(--muted);font-size:12.5px;word-break:break-all}
-.feed-row-url a:hover{color:var(--accent)}
-.feed-row-actions{display:flex;gap:6px;flex:none}
-.feed-edit{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-.feed-edit input{flex:1;min-width:120px}
-.feed-row-meta{display:flex;flex-wrap:wrap;gap:10px;color:var(--muted);font-size:12px;margin-top:8px}
-.reader h1{font-size:24px;line-height:1.3;margin:8px 0 6px;letter-spacing:-.01em}
-.reader .article-meta{font-size:13px}
-.actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;padding:12px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-iframe.article-frame{width:100%;min-height:320px;border:0;background:transparent;display:block}
-.back{font-size:13.5px;color:var(--muted)}
-.back:hover{color:var(--fg)}
-.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-.auth-card{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px}
-.auth-card h1{font-size:20px;margin:0 0 4px}
-.auth-card label{margin:14px 0 0}
-.auth-card input{width:100%;margin-top:5px}
-.auth-card .btn{width:100%;margin-top:20px;padding:10px}
-.setup{max-width:720px;margin:40px auto;padding:0 20px}
-.setup ul{line-height:1.9}
-.kv{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:13.5px}
-.kv dt{color:var(--muted)}
-.kv dd{margin:0;word-break:break-all}
-@media (max-width:760px){
-  .topbar{flex-wrap:wrap;gap:8px}
-  .brand{font-size:15px}
-  .search{order:3;flex-basis:100%;max-width:none}
-  .topnav{font-size:13px;margin-left:auto}
-  .shell{display:block}
-  .sidebar{position:static;width:auto;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:10px 12px}
-  .nav{flex-direction:row;overflow:auto;margin-bottom:10px}
-  .nav-item{white-space:nowrap;padding:6px 10px}
-  .badge{margin-left:4px}
-  main{padding:16px 14px 60px}
-  .reader h1{font-size:20px}
-  .feed-row-head{flex-direction:column}
+import { ARTICLE_CSS, CSS } from './styles';
+
+const ICONS = {
+  rss: '<circle cx="6" cy="18" r="1.5" fill="currentColor" stroke="none"/><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/>',
+  inbox: '<path d="M4 5h16v14H4zM4 12h5l2 3h2l2-3h5"/>',
+  unread: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="m4 7 8 6 8-6"/>',
+  star: '<path d="m12 3 2.8 5.8 6.4.9-4.6 4.5 1.1 6.3L12 17.5l-5.7 3 1.1-6.3L2.8 9.7l6.4-.9z"/>',
+  feeds: '<path d="M12 4v16M4 12h16"/><rect x="3" y="3" width="18" height="18" rx="5"/>',
+  settings: '<path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3" fill="var(--panel)"/><circle cx="16" cy="17" r="3" fill="var(--panel)"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+} as const;
+
+function icon(name: keyof typeof ICONS): string {
+  return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
 }
-`;
 
 const CLIENT_JS = `
 (function(){
+  var feedPanel = document.querySelector('.feed-panel');
+  if(feedPanel){
+    var mobile = window.matchMedia('(max-width:760px)');
+    function updatePanel(){feedPanel.open = !mobile.matches;}
+    updatePanel();
+    mobile.addEventListener('change',updatePanel);
+  }
   var rows = Array.prototype.slice.call(document.querySelectorAll('.article'));
   var cursor = -1;
+  function announce(message){
+    var status = document.getElementById('action-status');
+    if(status){status.textContent = message;}
+  }
   function post(body){
-    return fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),keepalive:true});
+    return fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),keepalive:true})
+      .then(function(response){if(!response.ok || response.redirected){throw new Error('state update failed');}return response.json();})
+      .then(function(result){if(!result.ok){throw new Error('state update failed');}return result;});
+  }
+  function readState(row,read){
+    if(!row){return;}
+    row.classList.toggle('is-read',read);
+    var label = row.querySelector('[data-read-status]');
+    if(label){label.textContent = read ? '已读' : '未读';}
   }
   function markRead(id,row){
-    if(row){row.classList.add('is-read');}
-    var payload = JSON.stringify({ids:[id],read:true});
-    if(navigator.sendBeacon){
-      try{ if(navigator.sendBeacon('/api/state',new Blob([payload],{type:'application/json'}))){return;} }catch(err){}
-    }
-    post({ids:[id],read:true});
+    var wasRead = !!(row && row.classList.contains('is-read'));
+    readState(row,true);
+    post({ids:[id],read:true}).catch(function(){
+      readState(row,wasRead);
+      announce('已读状态未保存，请检查网络后重试。');
+    });
   }
-  function toggleStar(btn){
-    var row = btn.closest('.article');
-    var starred = !row.classList.contains('is-starred');
+  function starState(btn,row,starred){
     row.classList.toggle('is-starred',starred);
     btn.textContent = starred ? '★' : '☆';
     btn.setAttribute('title',starred ? '取消收藏' : '收藏');
-    post({ids:[btn.getAttribute('data-star')],starred:starred});
+    btn.setAttribute('aria-label',starred ? '取消收藏' : '收藏');
+    btn.setAttribute('aria-pressed',String(starred));
+  }
+  function toggleStar(btn){
+    if(btn.disabled){return;}
+    var row = btn.closest('.article');
+    var starred = !row.classList.contains('is-starred');
+    btn.disabled = true;
+    announce('');
+    starState(btn,row,starred);
+    post({ids:[btn.getAttribute('data-star')],starred:starred})
+      .catch(function(){starState(btn,row,!starred);announce('收藏未保存，请检查网络后重试。');})
+      .finally(function(){btn.disabled = false;});
   }
   document.addEventListener('click',function(e){
     var target = e.target;
@@ -151,7 +91,7 @@ const CLIENT_JS = `
   }
   document.addEventListener('keydown',function(e){
     if(e.metaKey || e.ctrlKey || e.altKey){return;}
-    if(e.target && e.target.closest && e.target.closest('input, textarea, select')){return;}
+    if(e.target && e.target.closest && e.target.closest('input, textarea, select, button, a, summary, [contenteditable]')){return;}
     if(!rows.length){return;}
     if(e.key==='j'){e.preventDefault();move(1);}
     else if(e.key==='k'){e.preventDefault();move(-1);}
@@ -174,13 +114,18 @@ const CLIENT_JS = `
     function resize(){
       try{
         var doc = frame.contentDocument;
-        if(doc && doc.documentElement){
-          frame.style.height = Math.max(240,doc.documentElement.scrollHeight+32)+'px';
+        if(doc && doc.body){
+          frame.style.height = Math.max(320,Math.ceil(doc.body.getBoundingClientRect().height)+1)+'px';
         }
       }catch(err){}
     }
-    frame.addEventListener('load',resize);
+    function ready(){
+      resize();
+      try{frame.contentDocument.addEventListener('load',resize,true);}catch(err){}
+    }
+    frame.addEventListener('load',ready);
     window.addEventListener('resize',resize);
+    ready();
   });
 })();
 `;
@@ -209,8 +154,9 @@ function navLink(
   label: string,
   count: number | undefined,
   active: boolean,
+  symbol: keyof typeof ICONS,
 ): string {
-  return `<a class="nav-item${active ? ' active' : ''}" href="${href}"><span>${label}</span>${badge(count)}</a>`;
+  return `<a class="nav-item${active ? ' active' : ''}" href="${href}"${active ? ' aria-current="page"' : ''}>${icon(symbol)}<span>${label}</span>${badge(count)}</a>`;
 }
 
 function sidebar(options: LayoutOptions): string {
@@ -227,12 +173,12 @@ function sidebar(options: LayoutOptions): string {
   for (const [folder, subs] of groups) {
     if (folder) {
       const unread = subs.reduce((sum, sub) => sum + sub.unread, 0);
-      feedsHtml += `<a class="folder-label" href="/?folder=${encodeURIComponent(folder)}">${esc(folder)}${unread ? `<span class="badge">${unread}</span>` : ''}</a>`;
+      feedsHtml += `<a class="folder-label${options.activeFolder === folder ? ' active' : ''}" href="/?folder=${encodeURIComponent(folder)}"${options.activeFolder === folder ? ' aria-current="page"' : ''}>${esc(folder)}${unread ? `<span class="badge">${unread}</span>` : ''}</a>`;
     }
     for (const sub of subs) {
       const title = sub.title || sub.feed_title || sub.url;
       const active = options.activeFeedId === sub.feed_id;
-      feedsHtml += `<a class="feed-item${active ? ' active' : ''}" href="/?feed=${sub.feed_id}" title="${esc(title)}">
+      feedsHtml += `<a class="feed-item${active ? ' active' : ''}" href="/?feed=${sub.feed_id}" title="${esc(title)}"${active ? ' aria-current="page"' : ''}>
         <span class="avatar">${esc((title || '?').slice(0, 1).toUpperCase())}</span>
         <span class="feed-name">${esc(title)}</span>
         ${badge(sub.unread)}
@@ -240,20 +186,25 @@ function sidebar(options: LayoutOptions): string {
     }
   }
 
-  return `<aside class="sidebar">
-    <nav class="nav">
-      ${navLink('/', '全部文章', options.totalUnread, options.activeNav === 'all')}
-      ${navLink('/?stream=unread', '未读', options.totalUnread, options.activeNav === 'unread')}
-      ${navLink('/?stream=starred', '收藏', options.starred, options.activeNav === 'starred')}
-      ${navLink('/feeds', '订阅管理', subscriptions.length, options.activeNav === 'feeds')}
-      ${navLink('/settings', '设置', undefined, options.activeNav === 'settings')}
+  return `<aside class="sidebar" aria-label="阅读导航">
+    <nav class="nav" aria-label="文章分类">
+      ${navLink('/', '全部文章', options.totalUnread, options.activeNav === 'all', 'inbox')}
+      ${navLink('/?stream=unread', '未读', options.totalUnread, options.activeNav === 'unread', 'unread')}
+      ${navLink('/?stream=starred', '收藏', options.starred, options.activeNav === 'starred', 'star')}
+      ${navLink('/feeds', '订阅管理', subscriptions.length, options.activeNav === 'feeds', 'feeds')}
+      ${navLink('/settings', '设置', undefined, options.activeNav === 'settings', 'settings')}
     </nav>
-    <div class="side-head"><span>订阅源</span><a href="/feeds">管理</a></div>
-    ${feedsHtml || '<div class="folder-label">还没有订阅</div>'}
-    <div class="side-foot">
-      <span>${esc(options.user?.username ?? '')}</span>
-      <form method="post" action="/logout"><button class="link" type="submit">退出</button></form>
-    </div>
+    <details class="feed-panel" open>
+      <summary class="side-head"><span>订阅源</span><span class="source-count">${subscriptions.length}</span>${icon('chevron')}</summary>
+      <div class="feed-collection">
+        ${feedsHtml || '<div class="folder-label">添加订阅后，就能在这里找到它们。</div>'}
+        <div class="side-foot">
+          <span>${esc(options.user?.username ?? '')}</span>
+          <form method="post" action="/logout"><button class="link" type="submit">退出登录</button></form>
+        </div>
+      </div>
+    </details>
+    <div class="keyboard-hint" aria-label="键盘快捷键"><kbd>j</kbd><kbd>k</kbd><span>选择</span><kbd>o</kbd><span>打开</span><kbd>s</kbd><span>收藏</span></div>
   </aside>`;
 }
 
@@ -269,15 +220,14 @@ function documentPage(options: LayoutOptions): string {
 <title>${esc(options.title)} · ${esc(options.cfg.siteName)}</title>
 <style>${CSS}</style>
 </head>
-<body>
+<body class="${withSidebar ? 'with-sidebar' : 'without-sidebar'}">
+<a class="skip-link" href="#main-content">跳到正文</a>
 <header class="topbar">
-  <a class="brand" href="/">${esc(options.cfg.siteName)}</a>
-  ${withSidebar ? `<form class="search" method="get" action="/" role="search"><input type="search" name="q" value="${esc(options.search ?? '')}" placeholder="搜索文章" aria-label="搜索文章"></form>` : ''}
-  <nav class="topnav">
-    ${withSidebar ? '<a href="/feeds">订阅</a><a href="/settings">设置</a>' : ''}
-  </nav>
+  <a class="brand" href="/"><span class="brand-mark">${icon('rss')}</span><span class="brand-name">${esc(options.cfg.siteName)}</span></a>
+  ${withSidebar ? `<form class="search" method="get" action="/" role="search">${icon('search')}<input type="search" name="q" value="${esc(options.search ?? '')}" placeholder="搜索你的订阅文章" aria-label="搜索文章"></form>` : ''}
+  ${withSidebar ? `<nav class="topnav" aria-label="管理导航"><a href="/feeds"${options.activeNav === 'feeds' ? ' aria-current="page"' : ''}>${icon('feeds')}订阅</a><a href="/settings"${options.activeNav === 'settings' ? ' aria-current="page"' : ''}>${icon('settings')}设置</a></nav>` : ''}
 </header>
-${withSidebar ? `<div class="shell">${sidebar(options)}<main>${options.body}</main></div>` : options.body}
+${withSidebar ? `<div class="shell">${sidebar(options)}<main id="main-content" tabindex="-1"><p id="action-status" class="notice action-status" role="status" aria-live="polite"></p>${options.body}</main></div>` : `<div id="main-content" tabindex="-1">${options.body}</div>`}
 <script>${CLIENT_JS}</script>
 </body>
 </html>`;
@@ -293,10 +243,11 @@ export function loginPage(
     user: null,
     body: `<div class="auth-wrap">
   <form class="auth-card" method="post" action="/login">
-    <h1>${esc(cfg.siteName)}</h1>
-    <p class="muted">登录后阅读你的订阅</p>
-    ${state.error ? `<p class="error">${esc(state.error)}</p>` : ''}
-    <label>用户名<input name="username" autocomplete="username" required autofocus></label>
+    <div class="auth-symbol">${icon('rss')}</div>
+    <h1>继续阅读</h1>
+    <p class="muted">登录后查看你的订阅、未读与收藏。</p>
+    ${state.error ? `<p class="error" role="alert">${esc(state.error)}</p>` : ''}
+    <label>用户名<input type="text" name="username" autocomplete="username" required autofocus></label>
     <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
     <input type="hidden" name="next" value="${esc(state.next ?? '/')}">
     <button class="btn primary" type="submit">登录</button>
@@ -372,6 +323,24 @@ function pageHref(stream: Stream, search: string, cursor: string | null): string
   return query ? `/?${query}` : '/';
 }
 
+function isoDate(ms: number): string {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function listEmptyState(stream: Stream, search: string, hasSubscriptions: boolean): string {
+  const [title, message, href, action] = search
+    ? ['没有找到相关文章', '试试更短的关键词，或回到全部文章继续阅读。', '/', '查看全部文章']
+    : stream.kind === 'starred'
+      ? ['把值得重读的文章留在这里', '点击文章旁的星标，就能随时回来再读。', '/', '去看看文章']
+      : stream.kind === 'unread' && hasSubscriptions
+        ? ['未读已清空', '新文章会在下一次抓取后出现在这里。也可以重读之前的内容。', '/', '查看全部文章']
+        : hasSubscriptions
+          ? ['这里还没有文章', '订阅已准备好，抓取完成后文章就会出现在这里。', '/feeds', '查看订阅状态']
+          : ['从你喜欢的订阅开始', '添加一个博客、新闻网站或导入 OPML，把想读的内容放到一起。', '/feeds', '添加第一个订阅'];
+  return `<div class="empty">${icon(stream.kind === 'starred' ? 'star' : 'inbox')}<h2>${title}</h2><p>${message}</p><a class="btn" href="${href}">${action}</a></div>`;
+}
+
 export function listPage(args: {
   cfg: AppConfig;
   user: { username: string };
@@ -387,8 +356,8 @@ export function listPage(args: {
   search: string;
 }): string {
   const { stream } = args;
-  const activeNav =
-    stream.kind === 'unread' ? 'unread' : stream.kind === 'starred' ? 'starred' : 'all';
+  const activeNav = stream.kind === 'unread' ? 'unread'
+    : stream.kind === 'starred' ? 'starred' : stream.kind === 'all' ? 'all' : null;
   const activeFeedId = stream.kind === 'feed' ? Number(stream.ref) || null : null;
   const activeFolder = stream.kind === 'label' ? stream.label : null;
 
@@ -396,16 +365,17 @@ export function listPage(args: {
     .map(
       (entry) => `<li class="article${entry.read ? ' is-read' : ''}${entry.starred ? ' is-starred' : ''}" data-id="${esc(entry.item_id)}">
   <div class="article-main">
-    <a class="article-title" href="/item/${encodeURIComponent(entry.item_id)}" data-mark-read="${esc(entry.item_id)}">${esc(entry.title || '(无标题)')}</a>
     <div class="article-meta">
-      <span>${esc(entry.feed_title)}</span>
-      ${entry.folder ? `<span>· ${esc(entry.folder)}</span>` : ''}
-      <span>· ${timeAgo(entry.published_ms)}</span>
-      ${entry.enclosure_url ? '<span>· 附件</span>' : ''}
+      <span data-read-status class="sr-only">${entry.read ? '已读' : '未读'}</span>
+      <span class="article-source">${esc(entry.feed_title)}</span>
+      <time datetime="${isoDate(entry.published_ms)}">${timeAgo(entry.published_ms)}</time>
+      ${entry.folder ? `<span>${esc(entry.folder)}</span>` : ''}
+      ${entry.enclosure_url ? '<span>附件</span>' : ''}
     </div>
+    <a class="article-title" href="/item/${encodeURIComponent(entry.item_id)}" data-mark-read="${esc(entry.item_id)}">${esc(entry.title || '(无标题)')}</a>
     <p class="excerpt">${esc(preview(entry.summary || entry.content || '', 200))}</p>
   </div>
-  <button class="star-btn" type="button" data-star="${esc(entry.item_id)}" title="${entry.starred ? '取消收藏' : '收藏'}" aria-label="${entry.starred ? '取消收藏' : '收藏'}">${entry.starred ? '★' : '☆'}</button>
+  <button class="star-btn" type="button" data-star="${esc(entry.item_id)}" title="${entry.starred ? '取消收藏' : '收藏'}" aria-label="${entry.starred ? '取消收藏' : '收藏'}" aria-pressed="${entry.starred}">${entry.starred ? '★' : '☆'}</button>
 </li>`,
     )
     .join('\n');
@@ -414,12 +384,12 @@ export function listPage(args: {
   <h1>${esc(args.heading)}</h1>
   <form method="post" action="/mark-all-read" onsubmit="return confirm('把当前列表中的文章全部标为已读？')">
     ${streamHiddenFields(stream, args.search)}
-    <button class="btn small" type="submit">全部标为已读</button>
+    <button class="btn small" type="submit">${icon('check')}全部标为已读</button>
   </form>
 </div>
 <p class="subhead">${esc(args.subheading)}</p>
-${args.entries.length > 0 ? `<ul class="articles" style="list-style:none;margin:0;padding:0">${items}</ul>` : '<div class="empty">这里还没有文章。订阅之后，抓取会在后台进行。</div>'}
-${args.hasMore ? `<div class="pager"><a class="btn" href="${pageHref(stream, args.search, args.cursor)}">下一页 →</a></div>` : ''}`;
+${args.entries.length > 0 ? `<ul class="articles">${items}</ul>` : listEmptyState(stream, args.search, args.subscriptions.length > 0)}
+${args.hasMore ? `<div class="pager"><a class="btn" href="${pageHref(stream, args.search, args.cursor)}">下一页</a></div>` : ''}`;
 
   return documentPage({
     cfg: args.cfg,
@@ -442,7 +412,7 @@ function articleDocument(entry: EntryRow): string {
       ? `<base href="${esc(entry.url)}" target="_blank">`
       : '';
   const content = entry.content || entry.summary || '<p>（没有正文，请打开原文）</p>';
-  const style = `:root{color-scheme:light dark}html,body{margin:0;padding:0;background:transparent;color:inherit;font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}body{padding:4px 2px 24px;overflow-wrap:break-word}img,video{max-width:100%;height:auto}pre{overflow:auto;background:rgba(127,127,127,.14);padding:12px;border-radius:8px;font-size:13px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}blockquote{margin:0;padding-left:14px;border-left:3px solid rgba(127,127,127,.4);opacity:.9}a{color:#2563eb}table{max-width:100%;display:block;overflow:auto;border-collapse:collapse}td,th{border:1px solid rgba(127,127,127,.35);padding:4px 8px}figure{margin:0}iframe{max-width:100%}audio{width:100%}`;
+  const style = ARTICLE_CSS;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">${base}<style>${style}</style></head><body>${content}</body></html>`;
 }
 
@@ -533,7 +503,7 @@ export function feedsPage(args: {
 
   const body = `<div class="page-head"><h1>订阅管理</h1><form method="post" action="/refresh"><button class="btn small" type="submit">安排全部刷新</button></form></div>
 <p class="subhead">添加订阅后会在下一次 cron 抓取时更新；「立即抓取」只是把它排到队首。</p>
-${args.flash ? `<div class="card"><p>${esc(args.flash)}</p></div>` : ''}
+${args.flash ? `<div class="notice" role="status">${esc(args.flash)}</div>` : ''}
 <div class="card">
   <h2>添加订阅</h2>
   <form class="form-row" method="post" action="/feeds/add">

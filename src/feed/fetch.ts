@@ -1,6 +1,6 @@
 /** HTTP fetching for feeds, with conditional requests and feed autodiscovery. */
 
-import { absoluteUrl } from '../util';
+import { absoluteFeedUrl as absoluteUrl } from './url';
 
 export interface FetchDocumentOptions {
   etag?: string | null;
@@ -59,6 +59,7 @@ export async function fetchDocument(
   options: FetchDocumentOptions,
   accept: string,
 ): Promise<FetchDocumentResult> {
+  if (!absoluteUrl(url)) return { status: 'error', error: '订阅地址必须使用 http(s) 协议' };
   const fetcher = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 12_000;
   const maxBytes = options.maxBytes ?? 1_500_000;

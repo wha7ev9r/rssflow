@@ -10,14 +10,6 @@ export type Stream =
 
 const STATE_PREFIX = 'state/com.google/';
 
-function decodeComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 /**
  * Accepts Google Reader ids in all the shapes clients send:
  *   user/-/state/com.google/reading-list
@@ -33,7 +25,7 @@ export function parseStreamId(raw: string | null | undefined): Stream | null {
 
   if (id.startsWith('feed/')) {
     const ref = id.slice('feed/'.length).trim();
-    return ref ? { kind: 'feed', ref: decodeComponent(ref) } : null;
+    return ref ? { kind: 'feed', ref } : null;
   }
 
   const stateIndex = id.indexOf(STATE_PREFIX);
@@ -59,7 +51,7 @@ export function parseStreamId(raw: string | null | undefined): Stream | null {
     const labelIndex = id.indexOf('/label/');
     if (labelIndex >= 0) {
       const label = id.slice(labelIndex + '/label/'.length);
-      return label ? { kind: 'label', label: decodeComponent(label) } : null;
+      return label ? { kind: 'label', label } : null;
     }
   }
 

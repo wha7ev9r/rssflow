@@ -4,6 +4,10 @@ import { XMLParser } from 'fast-xml-parser';
 import { escapeHtml } from './util';
 import type { SubscriptionRow } from './store';
 
+export const MAX_OPML_BYTES = 512 * 1024;
+export const MAX_OPML_FEEDS = 200;
+const MAX_OUTLINE_DEPTH = 32;
+
 export interface OpmlFeed {
   url: string;
   title: string | null;
@@ -68,7 +72,8 @@ function attr(node: Record<string, unknown>, name: string): string | null {
   return value == null ? null : String(value);
 }
 
-function walk(node: unknown, folder: string | null, output: OpmlFeed[]): void {
+function walk(node: unknown, folder: string | null, output: OpmlFeed[], depth = 0): void {
+  if (depth > MAX_OUTLINE_DEPTH) throw new Error('OPML 文件夹嵌套过深（最多 32 层）');
   if (!node || typeof node !== 'object') return;
   const record = node as Record<string, unknown>;
   for (const raw of asArray(record.outline)) {
@@ -77,16 +82,22 @@ function walk(node: unknown, folder: string | null, output: OpmlFeed[]): void {
     const title = attr(outlineNode, 'title') ?? attr(outlineNode, 'text');
     const xmlUrl = attr(outlineNode, 'xmlUrl') ?? attr(outlineNode, 'xmlurl');
     if (xmlUrl) {
+      if (output.length >= MAX_OPML_FEEDS) {
+        throw new Error(`每次最多导入 ${MAX_OPML_FEEDS} 个订阅，请拆分 OPML 文件`);
+      }
       output.push({ url: xmlUrl, title: title ?? null, folder });
     }
     if (outlineNode.outline) {
       const nextFolder = xmlUrl ? folder : title ?? folder;
-      walk(outlineNode, nextFolder, output);
+      walk(outlineNode, nextFolder, output, depth + 1);
     }
   }
 }
 
 export function parseOpml(text: string): OpmlFeed[] {
+  if (text.length > MAX_OPML_BYTES || new TextEncoder().encode(text).byteLength > MAX_OPML_BYTES) {
+    throw new Error('OPML 文件过大（最多 512 KiB）');
+  }
   let document: Record<string, unknown>;
   try {
     document = parser.parse(text) as Record<string, unknown>;

@@ -113,13 +113,13 @@ describe('Google Reader API', () => {
     )).json() as { items: Array<{ id: string; title: string; timestampUsec: string; origin: { streamId: string } }> };
     expect(contents.items).toHaveLength(2);
     expect(contents.items[0]!.title).toBe('Alpha');
-    expect(contents.items[0]!.id).toMatch(/^[0-9a-f]{16}$/);
+    expect(contents.items[0]!.id).toMatch(/^tag:google\.com,2005:reader\/item\/[0-9a-f]{16}$/);
     expect(contents.items[0]!.origin.streamId).toBe('feed/https://example.com/rss');
     expect(Number(contents.items[0]!.timestampUsec)).toBeGreaterThan(0);
 
     const itemId = contents.items[0]!.id;
     const edit = await greader(
-      `/reader/api/0/edit-tag?i=${itemId}&a=${encodeURIComponent('user/-/state/com.google/read')}&a=${encodeURIComponent('user/-/state/com.google/starred')}`,
+      `/reader/api/0/edit-tag?i=${encodeURIComponent(itemId)}&a=${encodeURIComponent('user/-/state/com.google/read')}&a=${encodeURIComponent('user/-/state/com.google/starred')}`,
       token,
       { method: 'POST' },
     );
@@ -159,7 +159,7 @@ describe('Google Reader API', () => {
     expect(unreadAfter.items).toHaveLength(0);
 
     const items = await (await greader(
-      `/reader/api/0/stream/items/contents?i=${itemId}`,
+      `/reader/api/0/stream/items/contents?i=${encodeURIComponent(itemId)}`,
       token,
     )).json() as { items: Array<{ title: string }> };
     expect(items.items[0]!.title).toBe('Alpha');

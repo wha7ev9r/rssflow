@@ -1,6 +1,9 @@
 /** Worker entry point. */
 
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { csrf } from 'hono/csrf';
+import { HTTPException } from 'hono/http-exception';
 import {
   configProblems,
   databaseUrl,
@@ -22,6 +25,30 @@ export interface AppDeps {
 export function createApp(deps: AppDeps = {}) {
   const app = new Hono<AppEnv>();
   const makeDb = deps.createDb ?? ((env: Env) => connectPg(databaseUrl(env)));
+  const protectBrowserForms = csrf();
+
+  app.use('*', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'same-origin');
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('X-Frame-Options', 'SAMEORIGIN');
+    // Native RSS clients and cron callers do not send browser-origin headers.
+    // Browser writes must originate here, including JSON requests and sibling sites.
+    const origin = c.req.header('origin');
+    const site = c.req.header('sec-fetch-site');
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+      if ((origin !== undefined && origin !== new URL(c.req.url).origin) ||
+          (site !== undefined && site !== 'same-origin' && site !== 'none')) {
+        return c.text('Forbidden', 403);
+      }
+    }
+    if (origin !== undefined || site !== undefined) return protectBrowserForms(c, next);
+    await next();
+  });
+  app.use('*', bodyLimit({
+    maxSize: 1024 * 1024,
+    onError: (c) => c.text('Request body too large (maximum 1 MiB)', 413),
+  }));
 
   app.use('*', async (c, next) => {
     const cfg = readConfig(c.env);
@@ -70,6 +97,7 @@ export function createApp(deps: AppDeps = {}) {
   });
 
   app.onError((error, c) => {
+    if (error instanceof HTTPException) return error.getResponse();
     console.error('Unhandled error:', error);
     if (
       c.req.path.startsWith('/api/') ||

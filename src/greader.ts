@@ -11,7 +11,6 @@ import type { AppEnv, User } from './types';
 import { subscribeToUrl } from './ingest';
 import * as store from './store';
 import {
-  KEPT_UNREAD,
   READ,
   READING_LIST,
   STARRED,
@@ -43,9 +42,9 @@ function itemJson(entry: store.EntryRow): Record<string, unknown> {
   if (entry.starred) categories.push(STARRED);
 
   return {
-    id: entry.item_id,
-    crawlTimeMsec: String(Math.round(entry.fetched_ms)),
-    timestampUsec: String(publishedSec * 1_000_000),
+    id: `${ITEM_PREFIX}${entry.item_id}`,
+    crawlTimeMsec: String(Math.floor(entry.fetched_ms)),
+    timestampUsec: String(Math.floor(entry.fetched_ms * 1000)),
     published: publishedSec,
     updated: publishedSec,
     title: entry.title ?? '',
@@ -86,23 +85,62 @@ function subscriptionJson(sub: store.SubscriptionRow): Record<string, unknown> {
   };
 }
 
-function collectParams(
-  c: Context<AppEnv>,
-  name: string,
-  splitWhitespace = true,
-): string[] {
-  const values = [...(c.req.queries(name) ?? [])];
-  const single = c.req.query(name);
-  if (single && values.length === 0) values.push(single);
-  return values
-    .flatMap((value) => value.split(splitWhitespace ? /[,\s]+/ : /,/))
-    .map((value) => value.trim())
-    .filter(Boolean);
+async function requestParams(c: Context<AppEnv>): Promise<URLSearchParams> {
+  const params = new URL(c.req.url).searchParams;
+  if (c.req.method === 'POST') {
+    const body = await c.req.parseBody({ all: true });
+    for (const [name, value] of Object.entries(body)) {
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === 'string') params.append(name, item);
+      }
+    }
+  }
+  return params;
 }
 
-/** Tag names may contain spaces (folder names), so do not split on whitespace. */
-function collectTags(c: Context<AppEnv>, name: string): string[] {
-  return collectParams(c, name, false);
+/** Protocol lists use repeated parameters; commas and spaces are data. */
+function collectParams(params: URLSearchParams, name: string): string[] {
+  return params.getAll(name).map((value) => value.trim()).filter(Boolean);
+}
+
+function collectTags(params: URLSearchParams, name: string): string[] {
+  return collectParams(params, name);
+}
+
+const ITEM_PREFIX = 'tag:google.com,2005:reader/item/';
+
+/** Reader's ID list uses decimal uint64; full items use prefixed hexadecimal. */
+async function collectItemIds(c: Context<AppEnv>, params: URLSearchParams): Promise<string[]> {
+  const ids: Array<{ id: string; legacy?: string }> = [];
+  for (const raw of collectParams(params, 'i')) {
+    if (raw.startsWith(ITEM_PREFIX)) {
+      const hex = raw.slice(ITEM_PREFIX.length);
+      if (/^[0-9a-f]{16}$/i.test(hex)) ids.push({ id: hex.toLowerCase() });
+    } else if (/^-?\d{1,20}$/.test(raw)) {
+      const id = BigInt(raw);
+      if (id < -(1n << 63n) || id >= (1n << 64n)) continue;
+      ids.push({
+        id: BigInt.asUintN(64, id).toString(16).padStart(16, '0'),
+        ...(/^\d{16}$/.test(raw) ? { legacy: raw } : {}),
+      });
+    } else if (/^[0-9a-f]{16}$/i.test(raw)) {
+      ids.push({ id: raw.toLowerCase() });
+    }
+  }
+  const ambiguous = ids.filter((item) => item.legacy !== undefined);
+  if (ambiguous.length === 0) return ids.map((item) => item.id);
+  const rows = await c.get('db').query<{ item_id: string }>(
+    `select e.item_id from entries e
+     join subscriptions s on s.feed_id = e.feed_id and s.user_id = $1
+     where e.item_id = any($2::text[])`,
+    [c.get('user').id, ambiguous.flatMap((item) => [item.id, item.legacy!])],
+  );
+  const existing = new Set(rows.map((row) => row.item_id));
+  // Prefer the standard decimal interpretation. Fall back only if its target
+  // does not exist, so an ambiguous ID can never change two different items.
+  return ids.map((item) =>
+    !existing.has(item.id) && item.legacy && existing.has(item.legacy) ? item.legacy : item.id,
+  );
 }
 
 function labelFromTag(tag: string): string | null {
@@ -110,13 +148,13 @@ function labelFromTag(tag: string): string | null {
   if (!trimmed) return null;
   const marker = '/label/';
   const index = trimmed.indexOf(marker);
-  if (index >= 0) return safeDecode(trimmed.slice(index + marker.length));
+  if (index >= 0) return trimmed.slice(index + marker.length);
   if (trimmed.includes('/state/')) return null;
   return trimmed;
 }
 
-function collectLabels(c: Context<AppEnv>, name: string): string[] {
-  return collectTags(c, name)
+function collectLabels(params: URLSearchParams, name: string): string[] {
+  return collectTags(params, name)
     .map(labelFromTag)
     .filter((label): label is string => !!label);
 }
@@ -138,9 +176,36 @@ function decodeContinuation(value: string | undefined): { ms: number; id: number
   }
 }
 
+function listOptions(
+  params: URLSearchParams,
+  defaultLimit: number,
+  maxLimit: number,
+): Omit<store.ListEntriesOptions, 'stream'> {
+  const excludedRead = collectTags(params, 'xt').some((tag) => parseStreamId(tag)?.kind === 'read');
+  const includedRead = collectTags(params, 'it').some((tag) => parseStreamId(tag)?.kind === 'read');
+  const timestampMs = (name: string): number | null => {
+    const seconds = Number(params.get(name));
+    return Number.isFinite(seconds) && seconds > 0 && seconds <= 8_640_000_000_000
+      ? seconds * 1000
+      : null;
+  };
+  return {
+    search: params.get('q'),
+    limit: intFrom(params.get('n'), defaultLimit, 1, maxLimit),
+    before: decodeContinuation(params.get('c') ?? undefined),
+    // ot is the start time, nt is the stop time, both in Unix seconds.
+    afterMs: timestampMs('ot'),
+    beforeMs: timestampMs('nt'),
+    timeField: 'fetched',
+    order: params.get('r') === 'o' ? 'asc' : 'desc',
+    unreadOnly: excludedRead,
+    readOnly: includedRead && !excludedRead,
+  };
+}
+
 function streamIdFromRequest(c: Context<AppEnv>): string {
   const queryStream = c.req.query('s');
-  if (queryStream) return safeDecode(queryStream);
+  if (queryStream) return queryStream;
   const marker = '/stream/contents/';
   const path = c.req.path;
   const index = path.indexOf(marker);
@@ -148,11 +213,30 @@ function streamIdFromRequest(c: Context<AppEnv>): string {
   return safeDecode(path.slice(index + marker.length));
 }
 
-async function readTokenIsValid(c: Context<AppEnv>, user: User): Promise<boolean> {
-  const provided = c.req.query('T');
-  if (!provided) return true;
-  const expected = await actionToken(c.get('cfg'), user);
-  return timingSafeEqual(provided, expected);
+async function validateWrite(
+  c: Context<AppEnv>,
+  user: User,
+  params: URLSearchParams,
+): Promise<Response | null> {
+  const origin = c.req.header('origin');
+  if ((origin && origin !== new URL(c.req.url).origin) || c.req.header('sec-fetch-site') === 'cross-site') {
+    return c.text('Cross-origin request forbidden', 403);
+  }
+  const provided = params.getAll('T');
+  if (provided.length > 0) {
+    const expected = await actionToken(c.get('cfg'), user);
+    return provided.every((token) => timingSafeEqual(token, expected))
+      ? null
+      : c.text('Invalid token', 401);
+  }
+  // Only validated explicit credentials may omit T. A bogus Authorization
+  // header must not turn fallback cookie/query authentication into header auth.
+  const headerUser = await authenticate(c.get('db'), c.get('cfg'), {
+    header: (name) => c.req.header(name),
+    query: () => undefined,
+    cookie: () => undefined,
+  });
+  return headerUser?.id === user.id ? null : c.text('Action token required', 401);
 }
 
 export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
@@ -272,29 +356,10 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     const stream: Stream | null = parseStreamId(rawStreamId);
     if (!stream) return c.json({ error: 'Unknown stream' }, 400);
 
-    const xt = (c.req.queries('xt') ?? []).join(',');
-    const it = (c.req.queries('it') ?? []).join(',');
-    const cursor = decodeContinuation(c.req.query('c'));
-    const olderThan = Number.parseInt(c.req.query('ot') ?? '', 10);
-    const newerThan = Number.parseInt(c.req.query('nt') ?? '', 10);
-    const order = c.req.query('r') === 'o' ? 'asc' : 'desc';
-    const before =
-      cursor ??
-      (Number.isFinite(olderThan) && olderThan > 0
-        ? { ms: Math.floor(olderThan / 1000), id: Number.MAX_SAFE_INTEGER }
-        : null);
-    const afterMs =
-      Number.isFinite(newerThan) && newerThan > 0 ? Math.floor(newerThan / 1000) : null;
-
+    const params = await requestParams(c);
     const { entries, hasMore } = await store.listEntries(db, user.id, {
       stream,
-      search: c.req.query('q') ?? null,
-      limit: intFrom(c.req.query('n'), 20, 1, 100),
-      before,
-      afterMs,
-      order,
-      unreadOnly: xt.includes('/state/com.google/read'),
-      readOnly: it.includes('/state/com.google/read') && !xt.includes('/state/com.google/read'),
+      ...listOptions(params, 20, 100),
     });
 
     const last = entries[entries.length - 1];
@@ -309,48 +374,56 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
   app.get('/reader/api/0/stream/contents', contents);
   app.get('/reader/api/0/stream/contents/*', contents);
 
-  app.get('/reader/api/0/stream/items/contents', async (c) => {
-    const ids = collectParams(c, 'i');
+  async function itemContents(c: Context<AppEnv>) {
+    const ids = await collectItemIds(c, await requestParams(c));
     const entries = await store.getEntriesByItemIds(c.get('db'), c.get('user').id, ids);
     return c.json({ items: entries.map(itemJson) });
-  });
+  }
+
+  app.get('/reader/api/0/stream/items/contents', itemContents);
+  app.post('/reader/api/0/stream/items/contents', itemContents);
 
   app.get('/reader/api/0/stream/items/ids', async (c) => {
-    const rawStreamId = c.req.query('s') ?? READING_LIST;
+    const params = await requestParams(c);
+    const rawStreamId = params.get('s') ?? READING_LIST;
     const stream = parseStreamId(rawStreamId);
     if (!stream) return c.json({ error: 'Unknown stream' }, 400);
-    const xt = (c.req.queries('xt') ?? []).join(',');
-    const { entries } = await store.listEntries(c.get('db'), c.get('user').id, {
+    const { entries, hasMore } = await store.listEntries(c.get('db'), c.get('user').id, {
       stream,
-      limit: intFrom(c.req.query('n'), 100, 1, 200),
-      unreadOnly: xt.includes('/state/com.google/read'),
+      ...listOptions(params, 100, 200),
     });
+    const last = entries[entries.length - 1];
     return c.json({
       itemRefs: entries.map((entry) => ({
-        id: entry.item_id,
-        timestampUsec: String(Math.floor(entry.published_ms / 1000) * 1_000_000),
+        id: BigInt(`0x${entry.item_id}`).toString(),
+        timestampUsec: String(Math.floor(entry.fetched_ms * 1000)),
         directStreamIds: [feedStreamId(entry.feed_url)],
-        timestamp: Math.floor(entry.published_ms / 1000),
+        timestamp: Math.floor(entry.fetched_ms / 1000),
       })),
+      ...(hasMore && last ? { continuation: encodeContinuation(last) } : {}),
     });
   });
 
   app.post('/reader/api/0/edit-tag', async (c) => {
     const user = c.get('user');
-    if (!(await readTokenIsValid(c, user))) return c.text('Invalid token', 401);
-    const ids = collectParams(c, 'i');
+    const params = await requestParams(c);
+    const denied = await validateWrite(c, user, params);
+    if (denied) return denied;
+    const ids = await collectItemIds(c, params);
     if (ids.length === 0) return c.text('OK');
 
     let read: boolean | null = null;
     let starred: boolean | null = null;
-    for (const tag of collectTags(c, 'a')) {
-      if (tag === READ) read = true;
-      if (tag === KEPT_UNREAD) read = false;
-      if (tag === STARRED) starred = true;
+    for (const tag of collectTags(params, 'a')) {
+      const kind = parseStreamId(tag)?.kind;
+      if (kind === 'read') read = true;
+      if (kind === 'unread') read = false;
+      if (kind === 'starred') starred = true;
     }
-    for (const tag of collectTags(c, 'r')) {
-      if (tag === READ) read = false;
-      if (tag === STARRED) starred = false;
+    for (const tag of collectTags(params, 'r')) {
+      const kind = parseStreamId(tag)?.kind;
+      if (kind === 'read') read = false;
+      if (kind === 'starred') starred = false;
     }
     await store.setEntryStateByItemIds(c.get('db'), user.id, ids, read, starred);
     return c.text('OK');
@@ -358,12 +431,14 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
 
   app.post('/reader/api/0/mark-all-as-read', async (c) => {
     const user = c.get('user');
-    if (!(await readTokenIsValid(c, user))) return c.text('Invalid token', 401);
-    const stream = parseStreamId(c.req.query('s') ?? READING_LIST);
+    const params = await requestParams(c);
+    const denied = await validateWrite(c, user, params);
+    if (denied) return denied;
+    const stream = parseStreamId(params.get('s') ?? READING_LIST);
     if (!stream) return c.json({ error: 'Unknown stream' }, 400);
-    const rawTs = Number.parseInt(c.req.query('ts') ?? '', 10);
-    const maxMs = Number.isFinite(rawTs) && rawTs > 0 ? Math.floor(rawTs / 1000) : Date.now();
-    await store.markAllRead(c.get('db'), user.id, stream, c.req.query('q') ?? null, maxMs);
+    const rawTs = Number.parseInt(params.get('ts') ?? '', 10);
+    const maxMs = Number.isFinite(rawTs) && rawTs > 0 ? rawTs / 1000 : Date.now();
+    await store.markAllRead(c.get('db'), user.id, stream, params.get('q'), maxMs, 'fetched');
     return c.text('OK');
   });
 
@@ -371,15 +446,17 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     const db = c.get('db');
     const cfg = c.get('cfg');
     const user = c.get('user');
-    if (!(await readTokenIsValid(c, user))) return c.text('Invalid token', 401);
+    const params = await requestParams(c);
+    const denied = await validateWrite(c, user, params);
+    if (denied) return denied;
 
-    const ac = (c.req.query('ac') ?? '').toLowerCase();
-    const raw = c.req.query('s') ?? '';
+    const ac = (params.get('ac') ?? '').toLowerCase();
+    const raw = params.get('s') ?? '';
     if (!raw) return c.json({ error: 'Missing feed id' }, 400);
     const ref = raw.startsWith('feed/') ? raw.slice('feed/'.length) : raw;
-    const titleParam = c.req.query('t');
-    const folders = collectLabels(c, 'a');
-    const removeFolders = collectLabels(c, 'r');
+    const titleParam = params.get('t');
+    const folders = collectLabels(params, 'a');
+    const removeFolders = collectLabels(params, 'r');
 
     if (ac === 'subscribe') {
       try {
@@ -406,9 +483,9 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     }
 
     const patch: { title?: string | null; folder?: string | null } = {};
-    if (titleParam !== undefined) patch.title = titleParam.trim() || null;
+    if (titleParam !== null) patch.title = titleParam.trim() || null;
+    if (sub.folder && removeFolders.includes(sub.folder)) patch.folder = null;
     if (folders.length > 0) patch.folder = folders[0];
-    if (removeFolders.length > 0) patch.folder = null;
     await store.updateSubscription(db, user.id, sub.feed_id, patch);
     return c.text('OK');
   });
@@ -417,16 +494,10 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     const db = c.get('db');
     const cfg = c.get('cfg');
     const user = c.get('user');
-    let url = c.req.query('quickadd') ?? '';
-    if (!url) {
-      try {
-        const body = await c.req.parseBody();
-        const value = body.quickadd ?? body.url;
-        if (typeof value === 'string') url = value;
-      } catch {
-        /* no body */
-      }
-    }
+    const params = await requestParams(c);
+    const denied = await validateWrite(c, user, params);
+    if (denied) return denied;
+    const url = params.get('quickadd') || params.get('url') || '';
     if (!url) return c.json({ numResults: 0, query: '' }, 200);
     const existing = await store.getSubscription(db, user.id, url);
     if (existing) {
@@ -456,8 +527,11 @@ export function createGreaderRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
   app.post('/reader/api/0/rename-tag', async (c) => {
     const db = c.get('db');
     const user = c.get('user');
-    const raw = c.req.query('i') ?? c.req.query('s') ?? '';
-    const destination = c.req.query('dest') ?? c.req.query('t') ?? '';
+    const params = await requestParams(c);
+    const denied = await validateWrite(c, user, params);
+    if (denied) return denied;
+    const raw = params.get('i') ?? params.get('s') ?? '';
+    const destination = params.get('dest') ?? params.get('t') ?? '';
     const from = labelFromTag(raw);
     const to = labelFromTag(destination);
     if (from && to) await store.renameFolder(db, user.id, from, to);

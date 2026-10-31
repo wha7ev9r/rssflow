@@ -27,8 +27,16 @@ import {
 
 function safeNext(value: string | null | undefined): string {
   const candidate = (value ?? '').trim();
-  if (candidate.startsWith('/') && !candidate.startsWith('//')) return candidate;
-  return '/';
+  if (!candidate.startsWith('/') || candidate.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(candidate)) {
+    return '/';
+  }
+  // Validate with the same URL normalization the browser will use for Location.
+  const base = 'https://reader.invalid';
+  try {
+    return new URL(candidate, base).origin === base ? candidate : '/';
+  } catch {
+    return '/';
+  }
 }
 
 function encodeCursor(entry: store.EntryRow): string {
@@ -134,6 +142,7 @@ export function createWebRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     '/item/*',
     '/api/state',
     '/mark-all-read',
+    '/refresh',
     '/feeds',
     '/feeds/*',
     '/opml',
@@ -232,6 +241,8 @@ export function createWebRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
     const starred =
       starredValue === 'true' ? true : starredValue === 'false' ? false : null;
     await store.setEntryStateByItemIds(db, user.id, [c.req.param('id')], read, starred);
+    // Opening an article marks it read; do not reopen it after marking it unread.
+    if (read === false) return c.redirect('/?stream=unread');
     const referer = c.req.header('referer');
     return c.redirect(
       sameOrigin(referer, c.req.url)
@@ -243,9 +254,16 @@ export function createWebRoutes(fetchImpl?: typeof fetch): Hono<AppEnv> {
   web.post('/api/state', async (c) => {
     const db = c.get('db');
     const user = c.get('user');
+    if (c.req.header('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+      return c.json({ error: 'Expected application/json' }, 415);
+    }
     let payload: Record<string, unknown>;
     try {
-      payload = (await c.req.json()) as Record<string, unknown>;
+      const value: unknown = await c.req.json();
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return c.json({ error: 'Expected a JSON object' }, 400);
+      }
+      payload = value as Record<string, unknown>;
     } catch {
       return c.json({ error: 'Invalid JSON' }, 400);
     }

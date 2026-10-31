@@ -121,6 +121,9 @@ export interface ListEntriesOptions {
   limit?: number;
   before?: { ms: number; id: number } | null;
   afterMs?: number | null;
+  beforeMs?: number | null;
+  /** Reader sync bounds use crawl time; the web UI defaults to publication time. */
+  timeField?: 'published' | 'fetched';
   order?: 'asc' | 'desc';
   /** Extra state filters used by Google Reader's xt/it parameters. */
   unreadOnly?: boolean;
@@ -149,8 +152,12 @@ export async function listEntries(
     const op = order === 'asc' ? '>' : '<';
     clauses.push(`(e.published_at, e.id) ${op} (to_timestamp(${ms} / 1000.0), ${id}::bigint)`);
   }
+  const timeColumn = options.timeField === 'fetched' ? 'e.fetched_at' : 'e.published_at';
   if (options.afterMs != null) {
-    clauses.push(`e.published_at >= to_timestamp(${p(options.afterMs)} / 1000.0)`);
+    clauses.push(`${timeColumn} >= to_timestamp(${p(options.afterMs)} / 1000.0)`);
+  }
+  if (options.beforeMs != null) {
+    clauses.push(`${timeColumn} <= to_timestamp(${p(options.beforeMs)} / 1000.0)`);
   }
 
   const where = clauses.length > 0 ? `where ${clauses.join(' and ')}` : '';
@@ -223,6 +230,7 @@ export async function markAllRead(
   stream: Stream,
   search: string | null,
   maxPublishedMs: number,
+  timeField: 'published' | 'fetched' = 'published',
 ): Promise<number> {
   const params: unknown[] = [userId];
   const p: Param = (value) => {
@@ -230,7 +238,8 @@ export async function markAllRead(
     return `$${params.length}`;
   };
   const clauses = [...streamClauses(stream, p), ...searchClauses(search, p)];
-  clauses.push(`e.published_at <= to_timestamp(${p(maxPublishedMs)} / 1000.0)`);
+  const timeColumn = timeField === 'fetched' ? 'e.fetched_at' : 'e.published_at';
+  clauses.push(`${timeColumn} <= to_timestamp(${p(maxPublishedMs)} / 1000.0)`);
   return db.execute(
     `insert into entry_states (user_id, entry_id, read)
      select $1, e.id, true
@@ -295,15 +304,30 @@ export function folderUnread(subscriptions: SubscriptionRow[]): Map<string, numb
   return folders;
 }
 
-export async function listFeedsDue(db: Db, limit: number): Promise<FeedDueRow[]> {
+/** Atomically select and lease work; no database lock is held during HTTP fetches. */
+export async function claimFeedsDue(
+  db: Db,
+  limit: number,
+  feedId?: number,
+): Promise<FeedDueRow[]> {
   return db.query<FeedDueRow>(
-    `select f.id::int as id, f.url, f.etag, f.last_modified
-     from feeds f
-     where f.next_fetch_at <= now()
-       and exists (select 1 from subscriptions s where s.feed_id = f.id)
-     order by f.next_fetch_at asc
-     limit $1`,
-    [limit],
+    `with due as (
+       select f.id, f.next_fetch_at
+       from feeds f
+       where f.next_fetch_at <= now()
+         and ($2::bigint is null or f.id = $2)
+         and exists (select 1 from subscriptions s where s.feed_id = f.id)
+       order by f.next_fetch_at asc, f.id asc
+       limit $1
+       for update of f skip locked
+     ), claimed as (
+       update feeds f set next_fetch_at = now() + interval '300 seconds'
+       from due where f.id = due.id
+       returning f.id::int as id, f.url, f.etag, f.last_modified,
+                 due.next_fetch_at as due_at
+     )
+     select id, url, etag, last_modified from claimed order by due_at asc, id asc`,
+    [limit, feedId ?? null],
   );
 }
 
@@ -445,14 +469,20 @@ export async function insertEntries(
   items: PreparedItem[],
 ): Promise<number> {
   let inserted = 0;
-  for (let start = 0; start < items.length; start += 25) {
-    const chunk = items.slice(start, start + 25);
+  const guids = new Set<string>();
+  const uniqueItems = items.filter((item) => {
+    if (guids.has(item.guid)) return false;
+    guids.add(item.guid);
+    return true;
+  });
+  for (let start = 0; start < uniqueItems.length; start += 25) {
+    const chunk = uniqueItems.slice(start, start + 25);
     const values: string[] = [];
     const params: unknown[] = [];
     for (const item of chunk) {
       const base = params.length;
       values.push(
-        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, to_timestamp($${base + 11} / 1000.0))`,
+        `($${base + 1}::bigint, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, to_timestamp($${base + 11} / 1000.0))`,
       );
       params.push(
         feedId,
@@ -469,9 +499,18 @@ export async function insertEntries(
       );
     }
     const rows = await db.query<{ id: number }>(
-      `insert into entries (feed_id, guid, item_id, url, title, author, summary, content, enclosure_url, enclosure_type, published_at)
-       values ${values.join(', ')}
-       on conflict do nothing
+      `with incoming (feed_id, guid, item_id, url, title, author, summary, content, enclosure_url, enclosure_type, published_at) as (
+         values ${values.join(', ')}
+       ), registered as (
+         insert into entry_seen (feed_id, guid)
+         select feed_id, guid from incoming
+         on conflict (feed_id, guid) do nothing
+         returning feed_id, guid
+       )
+       insert into entries (feed_id, guid, item_id, url, title, author, summary, content, enclosure_url, enclosure_type, published_at)
+       select incoming.* from incoming
+       join registered using (feed_id, guid)
+       on conflict (feed_id, guid) do nothing
        returning id`,
       params,
     );
